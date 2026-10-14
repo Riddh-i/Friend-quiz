@@ -1,602 +1,595 @@
 
-(() => {
-  "use strict";
+"use strict";
 
-  const STORAGE_KEY = "bestieQuizData_v1";
-  const app = document.getElementById("app");
+const STORAGE_KEY = "bestieQuizData_v1";
+const app = document.getElementById("app");
 
-  if (!app) {
-    document.body.innerHTML =
-      "<h2>App setup error</h2><p>index.html needs an element with id=\"app\".</p>";
+let currentView = "home";
+let selectedQuestions = [];
+let answerKey = {};
+let draftName = "";
+let quizInProgress = null;
+let quizAnswers = {};
+let message = "";
+let messageType = "error";
+
+function loadData() {
+  try {
+    const data = JSON.parse(localStorage.getItem(STORAGE_KEY) || "{}");
+    return {
+      quizzes: Array.isArray(data.quizzes) ? data.quizzes : [],
+      results: Array.isArray(data.results) ? data.results : []
+    };
+  } catch (error) {
+    return { quizzes: [], results: [] };
+  }
+}
+
+function saveData(data) {
+  try {
+    localStorage.setItem(STORAGE_KEY, JSON.stringify(data));
+    return true;
+  } catch (error) {
+    showMessage("Couldn't save. Check your browser storage.", "error");
+    return false;
+  }
+}
+
+function escapeHTML(value) {
+  return String(value).replace(/[&<>"']/g, char => ({
+    "&": "&amp;",
+    "<": "&lt;",
+    ">": "&gt;",
+    '"': "&quot;",
+    "'": "&#39;"
+  })[char]);
+}
+
+function showMessage(text, type = "error") {
+  message = text;
+  messageType = type;
+  const old = document.getElementById("message");
+  if (old) {
+    old.className = type;
+    old.textContent = text;
+    old.hidden = false;
+  }
+}
+
+function clearMessage() {
+  message = "";
+  const old = document.getElementById("message");
+  if (old) old.hidden = true;
+}
+
+function makeCode() {
+  const chars = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789";
+  const data = loadData();
+  let code = "";
+
+  do {
+    code = "";
+    for (let i = 0; i < 6; i++) {
+      code += chars[Math.floor(Math.random() * chars.length)];
+    }
+  } while (data.quizzes.some(quiz => quiz.code === code));
+
+  return code;
+}
+
+function getQuestion(id) {
+  return QUESTION_BANK.find(question => question.id === Number(id));
+}
+
+function questionCard(question) {
+  const checked = selectedQuestions.includes(question.id);
+  const correct = answerKey[question.id];
+
+  return `
+    <div class="question-card">
+      <div class="question-top">
+        <input type="checkbox"
+          id="pick-${question.id}"
+          data-action="toggle-question"
+          data-id="${question.id}"
+          ${checked ? "checked" : ""}
+          aria-label="Select question ${question.id}">
+        <label for="pick-${question.id}">
+          <span class="muted">Q${question.id}.</span>
+          ${escapeHTML(question.text)}
+        </label>
+      </div>
+      ${checked ? `
+        <div class="answer-key">
+          <label for="correct-${question.id}">Which answer is correct?</label>
+          <select id="correct-${question.id}"
+            data-action="set-answer"
+            data-id="${question.id}">
+            <option value="">Choose the correct answer</option>
+            ${question.options.map((option, index) => `
+              <option value="${index}"
+                ${String(correct) === String(index) ? "selected" : ""}>
+                ${escapeHTML(option)}
+              </option>
+            `).join("")}
+          </select>
+        </div>
+      ` : ""}
+    </div>
+  `;
+}
+
+function renderHome() {
+  currentView = "home";
+  const data = loadData();
+
+  app.innerHTML = `
+    <section class="hero">
+      <div class="eyebrow">✿ THE FRIENDSHIP TEST ✿</div>
+      <div class="hero-art">💌 🧸 💗</div>
+      <h1>How well do you<br><span>know me?</span></h1>
+      <p class="muted">
+        A little quiz, a lot of memories, and a tiny test
+        of your bestie knowledge.
+      </p>
+      <div class="button-row">
+        <button class="primary-button" data-action="create">
+          + Create my quiz
+        </button>
+        <button class="secondary-button" data-action="enter-code">
+          Take a quiz
+        </button>
+      </div>
+    </section>
+
+    <section class="card">
+      <div class="section-head">
+        <h2>♡ Your quizzes</h2>
+        <span class="counter">${data.quizzes.length} saved</span>
+      </div>
+      ${data.quizzes.length ? data.quizzes.map(quiz => `
+        <div class="quiz-item">
+          <div>
+            <h3>${escapeHTML(quiz.name)}</h3>
+            <p class="muted">${quiz.questions.length} questions · Code
+              <span class="code">${escapeHTML(quiz.code)}</span>
+            </p>
+          </div>
+          <div class="quiz-actions">
+            <button class="primary-button" data-action="play"
+              data-code="${escapeHTML(quiz.code)}">Take quiz</button>
+            <button class="secondary-button" data-action="share"
+              data-code="${escapeHTML(quiz.code)}">Share</button>
+          </div>
+        </div>
+      `).join("") : `
+        <div class="empty">
+          <div style="font-size:32px">🌷</div>
+          No quizzes yet. Make your first one!
+        </div>
+      `}
+    </section>
+
+    <section class="card">
+      <div class="section-head">
+        <h2>🏆 Leaderboard</h2>
+        <button class="secondary-button" data-action="leaderboard">View all</button>
+      </div>
+      <p class="muted">Your saved scores will show up here after a quiz.</p>
+      ${renderTopScores(data.results)}
+    </section>
+
+    <div id="message" class="${messageType}" ${message ? "" : "hidden"}>${escapeHTML(message)}</div>
+    <div class="notice">
+      ✨ This version saves data only in this browser on this device.
+      Online sharing comes in Day 2.
+    </div>
+  `;
+}
+
+function renderTopScores(results) {
+  if (!results.length) {
+    return `<p class="empty">No scores yet. Be the first! ♡</p>`;
+  }
+
+  return [...results]
+    .sort((a, b) => b.percent - a.percent || b.date - a.date)
+    .slice(0, 3)
+    .map((result, index) => `
+      <div class="quiz-item">
+        <div>
+          <strong>${index + 1}. ${escapeHTML(result.player)}</strong>
+          <p class="muted">${escapeHTML(result.quizName)}</p>
+        </div>
+        <span class="code">${result.score}/${result.total} · ${result.percent}%</span>
+      </div>
+    `).join("");
+}
+
+function renderCreate() {
+  currentView = "create";
+
+  app.innerHTML = `
+    <section class="card">
+      <div class="section-head">
+        <div>
+          <div class="eyebrow">LET'S MAKE ONE ♡</div>
+          <h2 style="margin-top:12px">Create your quiz</h2>
+          <p class="muted">Make it personal. See who really knows you.</p>
+        </div>
+      </div>
+
+      <div class="field">
+        <label for="quiz-name">Quiz title</label>
+        <input id="quiz-name" type="text" maxlength="60"
+          placeholder="e.g. How well do you know me?"
+          value="${escapeHTML(draftName)}">
+      </div>
+
+      <div class="section-head">
+        <h3>Choose your questions</h3>
+        <span id="question-counter" class="counter">
+          ${selectedQuestions.length}/10 selected
+        </span>
+      </div>
+      <p class="hint">
+        Pick 1–10 questions. For each one, choose the correct answer.
+        Uncheck a question to replace it with another.
+      </p>
+
+      <div id="question-list">
+        ${QUESTION_BANK.map(questionCard).join("")}
+      </div>
+
+      <div id="message" class="${messageType}" ${message ? "" : "hidden"}>${escapeHTML(message)}</div>
+
+      <div class="button-row" style="margin-top:22px">
+        <button class="secondary-button" data-action="home">Cancel</button>
+        <button class="primary-button" data-action="save-quiz">Save my quiz ♡</button>
+      </div>
+    </section>
+  `;
+}
+
+function renderCodeEntry() {
+  currentView = "code";
+  app.innerHTML = `
+    <section class="card">
+      <div class="eyebrow">JOIN THE FUN ♡</div>
+      <h2 style="margin-top:12px">Take a friend's quiz</h2>
+      <p class="muted">Enter the six-character quiz code.</p>
+      <form id="code-form">
+        <div class="field">
+          <label for="quiz-code">Quiz code</label>
+          <input id="quiz-code" type="text" maxlength="6"
+            placeholder="ABC123" autocomplete="off" required>
+        </div>
+        <div id="message" class="${messageType}" ${message ? "" : "hidden"}>${escapeHTML(message)}</div>
+        <div class="button-row">
+          <button type="button" class="secondary-button" data-action="home">Back</button>
+          <button type="submit" class="primary-button">Find quiz</button>
+        </div>
+      </form>
+      <div class="notice">Local demo: the code works only where the quiz is saved.</div>
+    </section>
+  `;
+}
+
+function startQuiz(code) {
+  const data = loadData();
+  const quiz = data.quizzes.find(item =>
+    item.code.toUpperCase() === String(code).trim().toUpperCase()
+  );
+
+  if (!quiz) {
+    currentView = "code";
+    renderCodeEntry();
+    showMessage("Quiz not found. Check the code and try again.");
     return;
   }
 
-  const BANK =
-    typeof QUESTION_BANK !== "undefined" &&
-    Array.isArray(QUESTION_BANK)
-      ? QUESTION_BANK
-      : [];
+  quizInProgress = quiz;
+  quizAnswers = {};
+  renderTakeQuiz();
+}
 
-  let currentCode = "";
-  let message = "";
+function renderTakeQuiz() {
+  currentView = "take";
 
-  function loadData() {
-    try {
-      const saved = JSON.parse(localStorage.getItem(STORAGE_KEY));
-      if (saved && Array.isArray(saved.quizzes)) return saved;
-    } catch (error) {
-      console.error("Could not read saved quizzes:", error);
-    }
-    return { quizzes: [] };
-  }
+  app.innerHTML = `
+    <section class="card">
+      <div class="eyebrow">BESTIE QUIZ ♡</div>
+      <h2 style="margin-top:12px">${escapeHTML(quizInProgress.name)}</h2>
+      <p class="muted">Code: <span class="code">${escapeHTML(quizInProgress.code)}</span></p>
 
-  function saveData(data) {
-    try {
-      localStorage.setItem(STORAGE_KEY, JSON.stringify(data));
-      return true;
-    } catch (error) {
-      console.error("Could not save quizzes:", error);
-      alert("Couldn't save. Your device storage may be full.");
-      return false;
-    }
-  }
+      <form id="take-form">
+        <div class="field">
+          <label for="player-name">Your name or nickname</label>
+          <input id="player-name" type="text" maxlength="30"
+            placeholder="What should we call you?" required>
+        </div>
 
-  function escapeHTML(value) {
-    return String(value ?? "").replace(/[&<>"']/g, char => ({
-      "&": "&amp;",
-      "<": "&lt;",
-      ">": "&gt;",
-      '"': "&quot;",
-      "'": "&#39;"
-    })[char]);
-  }
+        ${quizInProgress.questions.map((item, index) => {
+          const question = getQuestion(item.id);
+          if (!question) return "";
 
-  function makeCode() {
-    const chars = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789";
-    const data = loadData();
-    let code;
+          return `
+            <div class="quiz-question">
+              <h3>${index + 1}. ${escapeHTML(question.text)}</h3>
+              ${question.options.map((option, optionIndex) => `
+                <label class="option">
+                  <input type="radio" name="q-${question.id}"
+                    value="${optionIndex}"
+                    ${String(quizAnswers[question.id]) === String(optionIndex) ? "checked" : ""}
+                    required>
+                  <span>${escapeHTML(option)}</span>
+                </label>
+              `).join("")}
+            </div>
+          `;
+        }).join("")}
 
-    do {
-      code = "";
-      for (let i = 0; i < 6; i++) {
-        code += chars[Math.floor(Math.random() * chars.length)];
-      }
-    } while (data.quizzes.some(quiz => quiz.code === code));
-
-    return code;
-  }
-
-  function getQuiz(code) {
-    return loadData().quizzes.find(
-      quiz => quiz.code === String(code).toUpperCase()
-    );
-  }
-
-  function showMessage(text) {
-    message = text;
-    const area = document.getElementById("app-message");
-    if (area) area.textContent = text;
-  }
-
-  function shell(content) {
-    app.innerHTML = `
-      <div style="max-width:760px;margin:0 auto;padding:20px;
-                  font-family:system-ui,sans-serif;color:#30263d;">
-        <header style="text-align:center;margin-bottom:24px;">
-          <button type="button" data-action="home"
-            style="border:0;background:none;font-size:28px;
-                   font-weight:800;color:#9b65bd;cursor:pointer;">
-            Bestie Quiz ♡
-          </button>
-          <p style="margin:4px 0;color:#76677f;">
-            How well do your friends know you?
-          </p>
-        </header>
-        ${content}
-        <p id="app-message" role="status"
-          style="color:#79509b;text-align:center;">${escapeHTML(message)}</p>
-        <footer style="text-align:center;font-size:12px;color:#887b91;
-                       margin-top:28px;">
-          Local demo · Quizzes are saved on this device
-        </footer>
-      </div>`;
-
-    message = "";
-  }
-
-  function card(content) {
-    return `<section style="background:#fff;border:1px solid #eadcf3;
-      border-radius:18px;padding:18px;margin:14px 0;
-      box-shadow:0 4px 16px #6f4b8310;">${content}</section>`;
-  }
-
-  function button(label, action, extra = "") {
-    return `<button type="button" data-action="${action}" ${extra}
-      style="border:0;border-radius:12px;padding:12px 16px;
-      margin:5px;background:#9c6bc0;color:white;font-weight:700;
-      cursor:pointer;">${label}</button>`;
-  }
-
-  function home() {
-    currentCode = "";
-    const data = loadData();
-
-    const quizzes = data.quizzes.map(quiz => {
-      quiz.results = Array.isArray(quiz.results) ? quiz.results : [];
-      return card(`
-      <h3>${escapeHTML(quiz.title)}</h3>
-      <p>Code: <strong>${escapeHTML(quiz.code)}</strong></p>
-      <p>${quiz.results.length} response(s)</p>
-      ${button("Creator dashboard", "manage", `data-code="${quiz.code}"`)}
-      ${button("Copy quiz code", "share", `data-code="${quiz.code}"`)}
-          `);
-    }).join("");
-
-    shell(`
-      ${card(`
-        <h2>Welcome, bestie! 💌</h2>
-        <p>Create a friendship quiz or answer one made by a friend.</p>
-        ${button("＋ Create a quiz", "create")}
-        ${button("♡ Take a friend's quiz", "enter-code")}
-      `)}
-      ${quizzes ? `<h2>Your quizzes on this device</h2>${quizzes}` : ""}
-      ${card(`
-        <h3>Already have a quiz code?</h3>
-        <form id="code-form">
-          <label for="quiz-code">Enter the 6-character code</label>
-          <input id="quiz-code" name="code" maxlength="6"
-            required placeholder="ABC123"
-            style="box-sizing:border-box;width:100%;padding:12px;
-                   margin:10px 0;border:1px solid #d9c4e8;border-radius:10px;">
-          <button type="submit"
-            style="border:0;border-radius:12px;padding:12px 16px;
-            background:#e8d7f5;color:#49315b;font-weight:700;">
-            Find quiz
-          </button>
-        </form>
-      `)}
-    `);
-  }
-
-  function createScreen() {
-    if (!BANK.length) {
-      shell(card(`
-        <h2>Question bank not loaded</h2>
-        <p>Check that questions.js is in the same folder as index.html
-        and that it loads before app.js.</p>
-        ${button("Back home", "home")}
-      `));
-      return;
-    }
-
-    const questionCards = BANK.map((q, index) => {
-      const id = String(q.id ?? index);
-      const options = Array.isArray(q.options) ? q.options : [];
-
-      return card(`
-        <label style="display:flex;gap:10px;align-items:flex-start;">
-          <input type="checkbox" name="question" value="${escapeHTML(id)}"
-            ${index < 5 ? "checked" : ""}
-            style="margin-top:5px;">
-          <strong>${escapeHTML(q.text || "Question")}</strong>
-        </label>
-        <label style="display:block;margin-top:12px;">
-          Correct answer:
-          <select name="correct-${escapeHTML(id)}"
-            style="width:100%;padding:10px;margin-top:6px;
-                   border:1px solid #d9c4e8;border-radius:10px;">
-            ${options.map((option, i) => `
-              <option value="${i}">${escapeHTML(option)}</option>
-            `).join("")}
-          </select>
-        </label>
-      `);
-    }).join("");
-
-    shell(`
-      ${card(`
-        <h2>Create your bestie quiz ✨</h2>
-        <form id="create-form">
-          <label for="quiz-title">Quiz title</label>
-          <input id="quiz-title" name="title" required maxlength="60"
-            placeholder="How well do you know me?"
-            style="box-sizing:border-box;width:100%;padding:12px;
-                   margin:8px 0 16px;border:1px solid #d9c4e8;border-radius:10px;">
-
-          <label for="creator-name">Your name or nickname</label>
-          <input id="creator-name" name="creator" required maxlength="40"
-            placeholder="Your nickname"
-            style="box-sizing:border-box;width:100%;padding:12px;
-                   margin:8px 0 16px;border:1px solid #d9c4e8;border-radius:10px;">
-
-          <p>Choose 1–10 questions and select the correct answer for each.</p>
-          <div style="display:flex;gap:8px;flex-wrap:wrap;">
-            ${button("Select first 5", "select-five")}
-            ${button("Clear selection", "clear-selection")}
-          </div>
-
-          <div id="question-list">${questionCards}</div>
-
-          <button type="submit"
-            style="width:100%;border:0;border-radius:12px;padding:14px;
-            background:#9c6bc0;color:white;font-weight:800;margin-top:14px;">
-            Create my quiz ♡
-          </button>
-        </form>
-      `)}
-      ${button("Cancel", "home")}
-    `);
-  }
-
-  function saveQuiz(form) {
-    const formData = new FormData(form);
-    const chosen = formData.getAll("question").map(String);
-
-    if (chosen.length < 1 || chosen.length > 10) {
-      alert("Choose between 1 and 10 questions.");
-      return;
-    }
-
-    const questions = chosen.map(id => {
-      const source = BANK.find(q => String(q.id) === id);
-      if (!source) return null;
-
-      return {
-        id,
-        text: String(source.text || "Question"),
-        options: Array.isArray(source.options)
-          ? source.options.map(String)
-          : [],
-        correctIndex: Number(formData.get(`correct-${id}`) || 0)
-      };
-    }).filter(q => q && q.options.length > 1);
-
-    if (questions.length !== chosen.length) {
-      alert("One or more questions couldn't be loaded. Please try again.");
-      return;
-    }
-
-    const data = loadData();
-    const quiz = {
-      code: makeCode(),
-      title: String(formData.get("title") || "My Bestie Quiz").trim(),
-      creator: String(formData.get("creator") || "Bestie").trim(),
-      questions,
-      results: [],
-      createdAt: Date.now()
-    };
-
-    data.quizzes.push(quiz);
-
-    if (!saveData(data)) return;
-
-    currentCode = quiz.code;
-    creatorDashboard(quiz.code);
-  }
-
-  function enterCodeScreen() {
-    shell(card(`
-      <h2>Enter your friend's code 💌</h2>
-      <form id="code-form">
-        <input name="code" required maxlength="6" placeholder="ABC123"
-          aria-label="Quiz code"
-          style="box-sizing:border-box;width:100%;padding:12px;
-          margin:10px 0;border:1px solid #d9c4e8;border-radius:10px;">
-        <button type="submit"
-          style="border:0;border-radius:12px;padding:12px 16px;
-          background:#9c6bc0;color:white;font-weight:700;">Continue</button>
+        <div id="message" class="${messageType}" ${message ? "" : "hidden"}>${escapeHTML(message)}</div>
+        <div class="button-row" style="margin-top:20px">
+          <button type="button" class="secondary-button" data-action="home">Cancel</button>
+          <button type="submit" class="primary-button">See my score ✨</button>
+        </div>
       </form>
-    `) + button("Back home", "home"));
+    </section>
+  `;
+}
+
+function submitQuiz(form) {
+  const player = form.querySelector("#player-name").value.trim();
+
+  if (!player) {
+    showMessage("Enter your name first.");
+    return;
   }
 
-  function takeQuiz(code) {
-    const quiz = getQuiz(code);
+  let score = 0;
+  const total = quizInProgress.questions.length;
 
-    if (!quiz) {
-      home();
-      showMessage("We couldn't find that quiz on this device.");
-      return;
-    }
-
-    currentCode = quiz.code;
-
-    shell(card(`
-      <h2>${escapeHTML(quiz.title)}</h2>
-      <p>Made by ${escapeHTML(quiz.creator)}</p>
-      <form id="take-form" data-code="${quiz.code}">
-        <label for="respondent">Your name or nickname</label>
-        <input id="respondent" name="respondent" required maxlength="40"
-          placeholder="Your nickname"
-          style="box-sizing:border-box;width:100%;padding:12px;
-          margin:8px 0 16px;border:1px solid #d9c4e8;border-radius:10px;">
-
-        ${quiz.questions.map((q, index) => `
-          <div style="padding:14px 0;border-top:1px solid #eee3f5;">
-            <p><strong>${index + 1}. ${escapeHTML(q.text)}</strong></p>
-            ${q.options.map((option, i) => `
-              <label style="display:flex;gap:8px;padding:7px 0;">
-                <input type="radio" name="answer-${escapeHTML(q.id)}"
-                  value="${i}" required>
-                <span>${escapeHTML(option)}</span>
-              </label>
-            `).join("")}
-          </div>
-        `).join("")}
-
-        <button type="submit"
-          style="width:100%;border:0;border-radius:12px;padding:14px;
-          background:#9c6bc0;color:white;font-weight:800;">Submit answers ♡</button>
-      </form>
-    `) + button("Back home", "home"));
-  }
-
-  function submitQuiz(form) {
-    const code = form.dataset.code;
-    const quiz = getQuiz(code);
-
-    if (!quiz) {
-      home();
-      showMessage("Quiz not found.");
-      return;
-    }
-
-    const formData = new FormData(form);
-    const respondent = String(formData.get("respondent") || "").trim();
-
-    const answers = quiz.questions.map(q => {
-      const selectedIndex = Number(formData.get(`answer-${q.id}`));
-
-      return {
-        questionId: q.id,
-        questionText: q.text,
-        selectedIndex,
-        selectedText: q.options[selectedIndex],
-        correctIndex: q.correctIndex,
-        correctText: q.options[q.correctIndex],
-        isCorrect: selectedIndex === q.correctIndex
-      };
-    });
-
-    const score = answers.filter(answer => answer.isCorrect).length;
-    const data = loadData();
-    const storedQuiz = data.quizzes.find(item => item.code === quiz.code);
-
-    if (!storedQuiz) {
-      home();
-      showMessage("Quiz not found.");
-      return;
-    }
-
-    storedQuiz.results.push({
-      id: `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
-      respondent,
-      score,
-      total: quiz.questions.length,
-      answers,
-      submittedAt: Date.now()
-    });
-
-    if (!saveData(data)) return;
-
-    shell(card(`
-      <h2>Answers submitted! 🎉</h2>
-      <p>You've finished <strong>${escapeHTML(quiz.title)}</strong>.</p>
-      <p>Your score: <strong>${score} / ${quiz.questions.length}</strong></p>
-      <p>Your friend can see your result in their creator dashboard on this device.</p>
-    `) + button("Back home", "home"));
-  }
-
-  function creatorDashboard(code) {
-    const quiz = getQuiz(code);
-
-    if (!quiz) {
-      home();
-      showMessage("Quiz not found.");
-      return;
-    }
-
-    currentCode = quiz.code;
-
-    const results = [...quiz.results].reverse();
-
-    shell(`
-      ${card(`
-        <h2>${escapeHTML(quiz.title)}</h2>
-        <p>Creator: ${escapeHTML(quiz.creator)}</p>
-        <p>Quiz code: <strong style="font-size:24px;letter-spacing:3px;">
-          ${quiz.code}</strong></p>
-        <p>Share this code with a friend. They can answer only if their
-        device has access to this quiz data.</p>
-        ${button("Copy code", "share", `data-code="${quiz.code}"`)}
-        ${button("Leaderboard", "leaderboard", `data-code="${quiz.code}"`)}
-      `)}
-
-      <h3>Responses (${results.length})</h3>
-
-      ${results.length ? results.map(result => card(`
-        <strong>${escapeHTML(result.respondent)}</strong>
-        <p>Score: ${result.score} / ${result.total}</p>
-        <p style="font-size:12px;color:#887b91;">
-          ${new Date(result.submittedAt).toLocaleString()}
-        </p>
-        ${button("View answers", "view-answers",
-          `data-code="${quiz.code}" data-result="${result.id}"`)}
-        ${button("Delete score", "delete-score",
-          `data-code="${quiz.code}" data-result="${result.id}"`)}
-      `)).join("") : card("<p>No one has answered this quiz yet.</p>")}
-
-      ${button("Back home", "home")}
-    `);
-  }
-
-  function viewAnswers(code, resultId) {
-    const quiz = getQuiz(code);
-    const result = quiz?.results.find(item => item.id === resultId);
-
-    if (!quiz || !result) {
-      home();
-      showMessage("That response couldn't be found.");
-      return;
-    }
-
-    const answers = Array.isArray(result.answers) ? result.answers : [];
-
-    shell(`
-      ${card(`
-        <h2>${escapeHTML(result.respondent)}'s answers</h2>
-        <p>Score: ${result.score} / ${result.total}</p>
-        ${answers.length ? answers.map((answer, index) => card(`
-          <p><strong>${index + 1}. ${escapeHTML(answer.questionText)}</strong></p>
-          <p>Their answer: ${escapeHTML(answer.selectedText)}</p>
-          <p>Correct answer: ${escapeHTML(answer.correctText)}</p>
-          <p style="color:${answer.isCorrect ? "#28734b" : "#a24a63"};">
-            ${answer.isCorrect ? "✓ Correct" : "✗ Incorrect"}
-          </p>
-        `)).join("") : `
-          <p>This response was submitted before answer tracking was added.
-          Individual answers weren't saved.</p>
-        `}
-      `)}
-      ${button("Back to dashboard", "manage", `data-code="${quiz.code}"`)}
-    `);
-  }
-
-  function leaderboard(code) {
-    const quiz = getQuiz(code);
-
-    if (!quiz) {
-      home();
-      return;
-    }
-
-    const results = [...quiz.results].sort((a, b) =>
-      b.score - a.score || a.respondent.localeCompare(b.respondent)
+  for (const item of quizInProgress.questions) {
+    const chosen = form.querySelector(
+      `input[name="q-${item.id}"]:checked`
     );
 
-    shell(`
-      ${card(`
-        <h2>Leaderboard 🏆</h2>
-        <h3>${escapeHTML(quiz.title)}</h3>
-        ${results.length ? results.map((result, index) => `
-          <p>${index + 1}. <strong>${escapeHTML(result.respondent)}</strong>
-          — ${result.score}/${result.total}</p>
-        `).join("") : "<p>No scores yet.</p>"}
-      `)}
-      ${button("Back to dashboard", "manage", `data-code="${quiz.code}"`)}
-    `);
-  }
+    if (!chosen) {
+      showMessage("Answer every question before submitting.");
+      return;
+    }
 
-  function deleteScore(code, resultId) {
-    const data = loadData();
-    const quiz = data.quizzes.find(item => item.code === code);
+    quizAnswers[item.id] = Number(chosen.value);
 
-    if (!quiz) return;
-
-    const result = quiz.results.find(item => item.id === resultId);
-    if (!result) return;
-
-    if (!window.confirm(`Delete ${result.respondent}'s score?`)) return;
-
-    quiz.results = quiz.results.filter(item => item.id !== resultId);
-
-    if (saveData(data)) {
-      creatorDashboard(code);
-      showMessage("Score deleted.");
+    if (Number(chosen.value) === Number(item.correct)) {
+      score++;
     }
   }
 
-  async function shareCode(code) {
-    const text = `My Bestie Quiz code is ${code}!`;
-
-    try {
-      if (navigator.clipboard && window.isSecureContext) {
-        await navigator.clipboard.writeText(text);
-        showMessage("Quiz code copied! Remember, this demo stores data locally.");
-      } else {
-        window.prompt("Copy this quiz code and send it to your friend:", code);
-      }
-    } catch (error) {
-      window.prompt("Copy this quiz code:", code);
-    }
-  }
-
-  app.addEventListener("click", event => {
-    const target = event.target.closest("[data-action]");
-    if (!target) return;
-
-    const action = target.dataset.action;
-    const code = target.dataset.code || currentCode;
-
-    if (action === "home") home();
-    if (action === "create") createScreen();
-    if (action === "enter-code") enterCodeScreen();
-    if (action === "manage") creatorDashboard(code);
-    if (action === "leaderboard") leaderboard(code);
-    if (action === "view-answers") {
-      viewAnswers(code, target.dataset.result);
-    }
-    if (action === "delete-score") {
-      deleteScore(code, target.dataset.result);
-    }
-    if (action === "share") shareCode(code);
-
-    if (action === "select-five") {
-      const boxes = app.querySelectorAll('input[name="question"]');
-      boxes.forEach((box, index) => {
-        box.checked = index < 5;
-      });
-    }
-
-    if (action === "clear-selection") {
-      app.querySelectorAll('input[name="question"]').forEach(box => {
-        box.checked = false;
-      });
-    }
+  const data = loadData();
+  data.results.push({
+    player: player,
+    quizName: quizInProgress.name,
+    code: quizInProgress.code,
+    score: score,
+    total: total,
+    percent: Math.round((score / total) * 100),
+    date: Date.now()
   });
 
-  app.addEventListener("submit", event => {
-    if (event.target.id === "create-form") {
-      event.preventDefault();
-      saveQuiz(event.target);
-    }
+  if (!saveData(data)) return;
+  renderResults(player, score, total);
+}
 
-    if (event.target.id === "code-form") {
-      event.preventDefault();
-      const code = String(new FormData(event.target).get("code") || "")
-        .trim().toUpperCase();
-      takeQuiz(code);
-    }
+function renderResults(player, score, total) {
+  currentView = "results";
+  const percent = Math.round((score / total) * 100);
+  let reaction = "Keep learning about each other! ♡";
 
-    if (event.target.id === "take-form") {
-      event.preventDefault();
-      submitQuiz(event.target);
-    }
-  });
+  if (percent === 100) reaction = "BESTIE EXPERT. YOU KNOW EVERYTHING! 💗";
+  else if (percent >= 70) reaction = "Okayyy, you know them pretty well! ✨";
+  else if (percent >= 40) reaction = "Some lore is still missing... 👀";
 
-  // Start the app only after the HTML is ready.
-  function start() {
-    try {
-      home();
-    } catch (error) {
   app.innerHTML = `
-    <div style="padding:20px;color:#b00020;">
-      <h2>Startup error</h2>
-      <pre style="white-space:pre-wrap;">${String(error.stack || error.message || error)}</pre>
-    </div>`;
-  console.error("App startup error:", error);
-  return;
+    <section class="card score">
+      <div class="hero-art">💌</div>
+      <div class="eyebrow">QUIZ COMPLETE</div>
+      <h2 style="margin-top:14px">${escapeHTML(player)}, your result is in!</h2>
+      <div class="score-number">${score}/${total}</div>
+      <h2>${percent}%</h2>
+      <p>${reaction}</p>
+      <p class="muted">Your score has been saved to this device's leaderboard.</p>
+      <div class="button-row">
+        <button class="primary-button" data-action="leaderboard">Leaderboard 🏆</button>
+        <button class="secondary-button" data-action="home">Home</button>
+      </div>
+    </section>
+  `;
+}
+
+function renderLeaderboard() {
+  currentView = "leaderboard";
+  const data = loadData();
+  const results = [...data.results].sort(
+    (a, b) => b.percent - a.percent || b.date - a.date
+  );
+
   app.innerHTML = `
-        <div style="padding:20px;font-family:system-ui,sans-serif;">
-          <h2>Oops! The app couldn't start.</h2>
-          <p>Check that questions.js and app.js are saved correctly.</p>
-          <button onclick="location.reload()">Reload app</button>
-        </div>`;
+    <section class="card">
+      <div class="eyebrow">THE BESTIES HALL OF FAME</div>
+      <h2 style="margin-top:12px">🏆 Leaderboard</h2>
+      <p class="muted">Ranked by percentage, with earlier scores winning ties.</p>
+      ${results.length ? results.map((result, index) => `
+        <div class="quiz-item">
+          <div>
+            <strong>${index + 1}. ${escapeHTML(result.player)}</strong>
+            <p class="muted">${escapeHTML(result.quizName)}</p>
+          </div>
+          <span class="code">${result.score}/${result.total} · ${result.percent}%</span>
+        </div>
+      `).join("") : `<div class="empty">No scores yet. Take a quiz first! ♡</div>`}
+      <div class="button-row" style="margin-top:22px">
+        <button class="primary-button" data-action="home">Back home</button>
+      </div>
+    </section>
+  `;
+}
+
+function saveQuiz() {
+  clearMessage();
+
+  const nameInput = document.getElementById("quiz-name");
+  draftName = nameInput ? nameInput.value.trim() : draftName;
+
+  if (!draftName) {
+    showMessage("Give your quiz a title first.");
+    return;
+  }
+
+  if (selectedQuestions.length < 1 || selectedQuestions.length > 10) {
+    showMessage("Choose between 1 and 10 questions.");
+    return;
+  }
+
+  for (const id of selectedQuestions) {
+    if (answerKey[id] === undefined || answerKey[id] === "") {
+      showMessage("Choose the correct answer for every selected question.");
+      return;
     }
   }
 
-  if (document.readyState === "loading") {
-    document.addEventListener("DOMContentLoaded", start, { once: true });
+  const data = loadData();
+  const quiz = {
+    name: draftName,
+    code: makeCode(),
+    questions: selectedQuestions.map(id => ({
+      id: id,
+      correct: Number(answerKey[id])
+    })),
+    createdAt: Date.now()
+  };
+
+  data.quizzes.push(quiz);
+  if (!saveData(data)) return;
+
+  selectedQuestions = [];
+  answerKey = {};
+  draftName = "";
+  message = "";
+  renderHome();
+  showMessage(`Quiz saved! Your code is ${quiz.code}.`, "success");
+}
+
+function shareQuiz(code) {
+  const url = new URL(window.location.href);
+  url.search = "";
+  url.hash = "";
+  url.searchParams.set("code", code);
+
+  const shareText = `Take my Bestie Quiz! Code: ${code}\n${url.href}\n\nNote: this demo link only works on the device where the quiz is saved.`;
+
+  if (navigator.share) {
+    navigator.share({
+      title: "My Bestie Quiz",
+      text: shareText
+    }).catch(() => {});
+  } else if (navigator.clipboard && navigator.clipboard.writeText) {
+    navigator.clipboard.writeText(shareText)
+      .then(() => showMessage("Share text copied! Remember, the quiz is local for now.", "success"))
+      .catch(() => showMessage(shareText, "success"));
   } else {
-    start();
+    showMessage(shareText, "success");
   }
-})();
+}
+
+app.addEventListener("change", event => {
+  const target = event.target;
+
+  if (target.dataset.action === "toggle-question") {
+    const id = Number(target.dataset.id);
+
+    if (target.checked) {
+      if (selectedQuestions.length >= 10) {
+        target.checked = false;
+        showMessage("Maximum 10 questions! Unselect one to replace it.");
+        return;
+      }
+      selectedQuestions.push(id);
+    } else {
+      selectedQuestions = selectedQuestions.filter(item => item !== id);
+      delete answerKey[id];
+    }
+
+    clearMessage();
+    renderCreate();
+  }
+
+  if (target.dataset.action === "set-answer") {
+    answerKey[Number(target.dataset.id)] = target.value;
+    clearMessage();
+  }
+});
+
+app.addEventListener("input", event => {
+  if (event.target.id === "quiz-name") {
+    draftName = event.target.value;
+  }
+});
+
+app.addEventListener("click", event => {
+  const button = event.target.closest("[data-action]");
+  if (!button) return;
+
+  const action = button.dataset.action;
+
+  if (action === "home") {
+    message = "";
+    renderHome();
+  } else if (action === "create") {
+    selectedQuestions = [];
+    answerKey = {};
+    draftName = "";
+    message = "";
+    renderCreate();
+  } else if (action === "enter-code") {
+    message = "";
+    renderCodeEntry();
+  } else if (action === "save-quiz") {
+    saveQuiz();
+  } else if (action === "play") {
+    startQuiz(button.dataset.code);
+  } else if (action === "share") {
+    shareQuiz(button.dataset.code);
+  } else if (action === "leaderboard") {
+    renderLeaderboard();
+  }
+});
+
+app.addEventListener("submit", event => {
+  event.preventDefault();
+
+  if (event.target.id === "code-form") {
+    const code = document.getElementById("quiz-code").value;
+    startQuiz(code);
+  }
+
+  if (event.target.id === "take-form") {
+    submitQuiz(event.target);
+  }
+});
+
+function boot() {
+  const params = new URLSearchParams(window.location.search);
+  const code = params.get("code");
+
+  if (code) {
+    renderCodeEntry();
+    document.getElementById("quiz-code").value = code.toUpperCase();
+    showMessage("This code works only if the quiz exists in this browser.", "success");
+  } else {
+    renderHome();
+  }
+}
+
+boot();
